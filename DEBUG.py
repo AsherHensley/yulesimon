@@ -5,6 +5,7 @@
 import yulesim as ys
 import matplotlib.pyplot as plt
 
+
 # Import Data
 prices = ys.import_prices('MCD',5)
 rt = ys.log_returns(prices['Close'])
@@ -12,10 +13,11 @@ rt = ys.log_returns(prices['Close'])
 # Init State
 chain = ys.markovchain(rt)
 
-
+# Burn-In
+chain.step(rt)
 
 plt.figure()
-plt.plot(chain.xt)
+plt.plot(chain.history.lambdas[:,0])
 plt.show()
 
 

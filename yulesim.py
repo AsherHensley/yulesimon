@@ -7,6 +7,9 @@ import datetime
 import numpy as np
 import scipy as sp
 
+class struct:
+    pass
+
 class markovchain:
     
     def __init__(self,data,a=2,b=2,c=5,d=5,rho=2):
@@ -17,19 +20,20 @@ class markovchain:
         self.c = c
         self.d = d
         self.rho = rho
-        self.xt = np.zeros(np.size(data))
+        self.x = np.zeros(np.size(data))
         self.lambdas = np.array(sample_gamma_posterior(data[0],0,self.c,self.d))
+        self.history = 0
         
         # Sample Yule-Simon Partitions
         self.__init_partitions(data)
-            
+
     def __init_partitions(self,data):
         
         # Setup
         nsamp = np.size(data)
-        self.xt[0] = 1
+        self.x[0] = 1
         counter = 1.0
-        state = 1.0
+        state = 0
         
         # Run
         for kk in range(1,nsamp):
@@ -51,8 +55,7 @@ class markovchain:
                 counter = counter + 1  
             
             # Update Partition
-            self.xt[kk] = state
-    
+            self.x[kk] = state
     
     def __forward_weights(self,data,counter):
     
@@ -69,7 +72,33 @@ class markovchain:
         # Compute Weights
         w = L * p
         return w / np.sum(w)
-            
+    
+    def step(self,data,nsteps=2000):
+        
+        # Init History
+        self.__init_history(data,nsteps)
+
+        
+    def __init_history(self,data,nsteps):
+        
+        # Setup
+        self.history = struct()
+        self.history.a = np.zeros(nsteps)
+        self.history.b = np.zeros(nsteps)
+        self.history.c = np.zeros(nsteps)
+        self.history.d = np.zeros(nsteps)
+        self.history.rho = np.zeros(nsteps)
+        self.history.lambdas = np.zeros((np.size(data),nsteps))
+        self.history.x = np.zeros((np.size(data),nsteps))
+        
+        # Assign First Value
+        self.history.a[0] = self.a
+        self.history.b[0] = self.b
+        self.history.c[0] = self.c
+        self.history.d[0] = self.d
+        self.history.rho[0] = self.rho
+        self.history.lambdas[:,0] = self.lambdas[self.x.astype(int)]
+        self.history.x[:,0] = self.x
           
 def import_prices(symbol,n_years):
     
