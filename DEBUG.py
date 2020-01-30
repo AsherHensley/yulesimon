@@ -1,21 +1,23 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 
-from yulesimon import yulesimon
+# Libraries
+import yulesim as ys
 import matplotlib.pyplot as plt
 
-# Setup
-test = yulesimon()
-prices = test.import_prices('MCD',5)
-rt = test.log_returns(prices['Close'])
+# Import Data
+prices = ys.import_prices('MCD',5)
+rt = ys.log_returns(prices['Close'])
 
-# Init
-test.init_markov_chain(rt,rho=1)
+# Init State
+chain = ys.markovchain(rt)
+
 
 
 plt.figure()
-plt.plot(test.chain.xt)
+plt.plot(chain.xt)
 plt.show()
+
 
 
 """
@@ -28,6 +30,7 @@ ax[1].set_title('Log Returns')
 ax[1].grid(linestyle='--')
 plt.show()
 """
+
 
 """
 # Verify gamma pdf
