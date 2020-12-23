@@ -3,6 +3,7 @@
 
 import numpy as np
 from scipy.special import gamma, beta
+from scipy.stats import normaltest
 import pandas_datareader.data as web
 import datetime
 
@@ -19,12 +20,14 @@ def GetYahooFeed(symbol,n_years):
     log_returns = []
     try:
         df = web.DataReader(symbol, 'yahoo', start, end)
-        log_returns = np.diff(np.log(df.Close.to_numpy()))
+        closing_prices = df.Close.to_numpy()
+        log_returns = np.diff(np.log(closing_prices))
+        dates = df.index.copy()
            
     except:
         print("No information for ticker # and symbol: " + symbol)
               
-    return log_returns
+    return closing_prices, log_returns, dates
      
 #-----------------------------------------------------------------------------
 # Simulate
@@ -83,16 +86,16 @@ def ExpectedValue(data,burnin,downsample):
 # TimeSeries
 #-----------------------------------------------------------------------------
 class TimeSeries():
-    
+
     #-------------------------------------------------------------------------
     # __init__
     #-------------------------------------------------------------------------
-    def __init__(self, data, alpha=1, a0=1, b0=1, init='uniform', init_segments=10):
+    def __init__(self, data, alpha=5, a0=1, b0=1, init='uniform', init_segments=50):
         self.data = data
         self.nsamp = np.size(self.data)
         self.alpha = alpha
         self.a0 = a0
-        self.b0 = b0
+        self.b0 = b0 * np.var(data)
         self.lambdas = np.array(self.__gamma_posterior(data[0]))
         self.x = np.zeros(data.shape)
         
@@ -206,7 +209,7 @@ class TimeSeries():
         return history
     
     #-------------------------------------------------------------------------
-    # __init_history
+    # __sample_alpha
     #-------------------------------------------------------------------------  
     def __sample_alpha(self):
         
@@ -228,6 +231,7 @@ class TimeSeries():
         history.std_deviation = np.zeros((self.nsamp, N+1))
         history.boundaries = np.zeros((self.nsamp, N+1))
         history.alpha = np.zeros(N+1)
+        history.pvalue = np.zeros(N+1)
         
         self.__update_history(history, 0)
 
@@ -242,6 +246,10 @@ class TimeSeries():
         history.std_deviation[:,idx] = 1/np.sqrt(self.lambdas[self.x.astype('int')])
         history.boundaries[:,idx] = np.append(0,np.diff(self.x))
         history.alpha[idx] = self.alpha
+        
+        # Goodness of fit
+        h,p = normaltest(self.data*np.sqrt(self.lambdas[self.x.astype('int')]))
+        history.pvalue[idx] = p  
             
     #-------------------------------------------------------------------------
     # __log_likelihood
