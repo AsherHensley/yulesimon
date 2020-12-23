@@ -80,7 +80,7 @@ def ExpectedValue(data,burnin,downsample):
     return np.mean(data[:,int(burnin):int(downsample):-1],axis=1)
 
 #-----------------------------------------------------------------------------
-# LatentYuleSimon
+# TimeSeries
 #-----------------------------------------------------------------------------
 class TimeSeries():
     
