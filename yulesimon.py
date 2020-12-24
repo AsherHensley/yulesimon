@@ -79,8 +79,14 @@ def Student(data,mu,precision,dof):
 #-----------------------------------------------------------------------------
 # ExpectedValue
 #-----------------------------------------------------------------------------
-def ExpectedValue(data,burnin,downsample): 
-    return np.mean(data[:,int(burnin):int(downsample):-1],axis=1)
+def ExpectedValue(data,burnin,downsample,mask=[]): 
+    tmp = data[:,int(burnin):int(downsample):-1]
+    if len(mask)>0:
+        mask = mask[int(burnin):int(downsample):-1]
+        tmp = tmp[:,mask]   
+    shape = tmp.shape
+
+    return np.mean(tmp,axis=1), shape[1]
 
 #-----------------------------------------------------------------------------
 # TimeSeries
@@ -90,12 +96,12 @@ class TimeSeries():
     #-------------------------------------------------------------------------
     # __init__
     #-------------------------------------------------------------------------
-    def __init__(self, data, alpha=5.0, a0=1.0, b0=1.0, Q = 1e-9, init='uniform', init_segments=50):
-        self.data = data
+    def __init__(self, data, alpha=5.0, a0=5.0, b0=5.0, Q = 1e-9, init='uniform', init_segments=50):
+        self.data = data * 100
         self.nsamp = np.size(self.data)
         self.alpha = alpha
         self.a0 = a0
-        self.b0 = b0 # * np.var(data)
+        self.b0 = b0 
         self.lambdas = np.array(self.__gamma_posterior(data[0]))
         self.x = np.zeros(data.shape)
         self.mu = np.zeros(data.shape)
@@ -216,12 +222,19 @@ class TimeSeries():
             self.__sample_alpha()
             self.__sample_gamma_hyperparameters()
             self.__kalman_filter() 
+            self.__sample_process_noise()
             self.__update_history(history, step+1)
             
             if (step % round(N/100)) == 0:
                 print(".",end='')
                 
         return history
+    
+    #-------------------------------------------------------------------------
+    # __sample_process_noise
+    #-------------------------------------------------------------------------
+    def __sample_process_noise(self):
+        self.Q  = 1/self.__gamma_posterior(np.diff(self.mu),1,1)
     
     #-------------------------------------------------------------------------
     # __sample_gamma_hyperparameters
@@ -232,8 +245,8 @@ class TimeSeries():
         X = np.array([self.a0,self.b0])
         
         # Proposal Distribution Sigma
-        sigma2_a = (2*0.50) ** 2
-        sigma2_b = (2*0.25) ** 2
+        sigma2_a = (3*0.50) ** 2
+        sigma2_b = (3*0.25) ** 2
         
         # Proposal Distribution
         Q = lambda z,mu,Sig: multivariate_normal.pdf(z,mean=mu,cov=Sig) / multivariate_normal.cdf([0,0],mean=-mu,cov=Sig)
@@ -282,7 +295,7 @@ class TimeSeries():
             mu[ii] = mu[ii-1] + K * (self.data[ii] - mu[ii-1])
             V[ii] = (1-K) * P[ii-1]
             P[ii] = V[ii] + self.Q
-            
+        
         # Backward Recursion
         self.mu[-1] = mu[-1]
         for ii in range(self.nsamp-2,-1,-1):
