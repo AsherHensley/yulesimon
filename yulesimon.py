@@ -98,13 +98,16 @@ class TimeSeries():
         self.b0 = b0 * np.var(data)
         self.lambdas = np.array(self.__gamma_posterior(data[0]))
         self.x = np.zeros(data.shape)
-        
+        self.mu = np.zeros(data.shape)
+
         if (init=='uniform'):
             self.__init_partitions_uniform(init_segments)
         elif (init=='prior'):
             self.__init_partitions()
         else:
             raise ValueError('Unknown Initialization Type: ' + init)
+            
+        self.__kalman_filter()
         
     #-------------------------------------------------------------------------
     # __init_partitions_uniform
@@ -199,6 +202,7 @@ class TimeSeries():
 
         for step in range(N):
             self.__sample_partitions()
+            self.__kalman_filter()
             self.__sample_lambdas()
             self.__sample_alpha()
             self.__update_history(history, step+1)
@@ -208,6 +212,37 @@ class TimeSeries():
                 
         return history
     
+    #-------------------------------------------------------------------------
+    # __kalman_filter
+    #-------------------------------------------------------------------------
+    def __kalman_filter(self):
+        
+        Q = 0.00001
+        R = 1/self.lambdas[self.x.astype('int')]
+        V = np.zeros(np.size(R))
+        P = np.zeros(np.size(R))
+        mu = np.zeros(np.size(R))
+        
+        # Initial Value
+        V0 = 1/np.sqrt(self.lambdas[0])
+        K = V0 / (V0 + R[0])
+        mu[0] = 0.0 + K * (self.data[0] - 0.0)
+        V[0] = (1-K) * V0
+        P[0] = V[0] + Q
+        
+        # Forward Recursion
+        for ii in range(1,self.nsamp):
+            K = P[ii-1] / (P[ii-1] + R[ii])
+            mu[ii] = mu[ii-1] + K * (self.data[ii] - mu[ii-1])
+            V[ii] = (1-K) * P[ii-1]
+            P[ii] = V[ii] + Q
+            
+        # Backward Recursion
+        self.mu[-1] = mu[-1]
+        for ii in range(self.nsamp-2,-1,-1):
+            J = V[ii]/P[ii]
+            self.mu[ii] = mu[ii] + J * (self.mu[ii+1]-mu[ii])
+            
     #-------------------------------------------------------------------------
     # __sample_alpha
     #-------------------------------------------------------------------------  
@@ -230,6 +265,7 @@ class TimeSeries():
         history.log_likelihood = np.zeros(N+1)
         history.std_deviation = np.zeros((self.nsamp, N+1))
         history.boundaries = np.zeros((self.nsamp, N+1))
+        history.mean = np.zeros((self.nsamp, N+1))
         history.alpha = np.zeros(N+1)
         history.pvalue = np.zeros(N+1)
         
@@ -245,10 +281,11 @@ class TimeSeries():
         history.log_likelihood[idx] = self.__log_likelihood()
         history.std_deviation[:,idx] = 1/np.sqrt(self.lambdas[self.x.astype('int')])
         history.boundaries[:,idx] = np.append(0,np.diff(self.x))
+        history.mean[:,idx] = self.mu
         history.alpha[idx] = self.alpha
         
         # Goodness of fit
-        h,p = normaltest(self.data*np.sqrt(self.lambdas[self.x.astype('int')]))
+        h,p = normaltest((self.data - self.mu)*np.sqrt(self.lambdas[self.x.astype('int')]))
         history.pvalue[idx] = p  
             
     #-------------------------------------------------------------------------
@@ -282,7 +319,7 @@ class TimeSeries():
         
         N = int(max(self.x)+1)
         for ii in range(N):
-            yt = self.data[self.x==ii]
+            yt = self.data[self.x==ii] - self.mu[self.x==ii]
             self.lambdas[ii] = self.__gamma_posterior(yt)
                  
     #-------------------------------------------------------------------------
@@ -324,7 +361,7 @@ class TimeSeries():
     def __update_markov_chain(self, idx, boundary):
         
         n = self.__get_partitions_counts()
-        yt = self.data[idx]
+        yt = self.data[idx] - self.mu[idx]
         xt = int(self.x[idx])
         wnew = self.alpha / (1+self.alpha) * Student(yt,0,self.a0/self.b0,2*self.b0) 
         
@@ -444,7 +481,7 @@ class TimeSeries():
     def __sample_left_boundary(self, w, idx):
     
         u = self.__sample_discrete(w)
-        yt = self.data[idx]
+        yt = self.data[idx] - self.mu[idx]
         xt = int(self.x[idx])
         
         if u==0:
@@ -468,7 +505,7 @@ class TimeSeries():
     def __sample_right_boundary(self, w, idx):
         
         u = self.__sample_discrete(w)
-        yt = self.data[idx]
+        yt = self.data[idx] - self.mu[idx]
         xt = int(self.x[idx])
         
         if u==0:
@@ -493,7 +530,7 @@ class TimeSeries():
     def __sample_double_boundary(self, w, idx):
         
         u = self.__sample_discrete(w)
-        yt = self.data[idx]
+        yt = self.data[idx] - self.mu[idx]
         xt = int(self.x[idx])
         
         if u==0:
