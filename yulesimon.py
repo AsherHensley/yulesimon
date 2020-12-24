@@ -3,7 +3,7 @@
 
 import numpy as np
 from scipy.special import gamma, beta
-from scipy.stats import normaltest
+from scipy.stats import normaltest, multivariate_normal
 import pandas_datareader.data as web
 import datetime
 
@@ -90,15 +90,16 @@ class TimeSeries():
     #-------------------------------------------------------------------------
     # __init__
     #-------------------------------------------------------------------------
-    def __init__(self, data, alpha=5, a0=1, b0=1, init='uniform', init_segments=50):
+    def __init__(self, data, alpha=5.0, a0=1.0, b0=1.0, Q = 1e-9, init='uniform', init_segments=50):
         self.data = data
         self.nsamp = np.size(self.data)
         self.alpha = alpha
         self.a0 = a0
-        self.b0 = b0 * np.var(data)
+        self.b0 = b0 # * np.var(data)
         self.lambdas = np.array(self.__gamma_posterior(data[0]))
         self.x = np.zeros(data.shape)
         self.mu = np.zeros(data.shape)
+        self.Q = Q
 
         if (init=='uniform'):
             self.__init_partitions_uniform(init_segments)
@@ -186,11 +187,20 @@ class TimeSeries():
     #-------------------------------------------------------------------------
     # __gamma_posterior
     #-------------------------------------------------------------------------
-    def __gamma_posterior(self, data):   
+    def __gamma_posterior(self, data, a0=-1, b0=-1):   
+       
         mu = 0.0
         N = np.size(data)
-        aN = self.a0 + 0.5 * N
-        bN = self.b0 + 0.5 * np.sum(np.square(data - mu))    
+        
+        if a0==-1:
+            a0 = self.a0
+
+        if b0==-1:
+            b0 = self.b0
+        
+        aN = a0 + 0.5 * N
+        bN = b0 + 0.5 * np.sum(np.square(data - mu)) 
+        
         return np.random.gamma(aN,1/bN,1)
     
     #-------------------------------------------------------------------------
@@ -202,9 +212,10 @@ class TimeSeries():
 
         for step in range(N):
             self.__sample_partitions()
-            self.__kalman_filter()
             self.__sample_lambdas()
             self.__sample_alpha()
+            self.__sample_gamma_hyperparameters()
+            self.__kalman_filter() 
             self.__update_history(history, step+1)
             
             if (step % round(N/100)) == 0:
@@ -213,29 +224,64 @@ class TimeSeries():
         return history
     
     #-------------------------------------------------------------------------
+    # __sample_gamma_hyperparameters
+    #-------------------------------------------------------------------------
+    def __sample_gamma_hyperparameters(self):
+        
+        # Initial Condition
+        X = np.array([self.a0,self.b0])
+        
+        # Proposal Distribution Sigma
+        sigma2_a = (2*0.50) ** 2
+        sigma2_b = (2*0.25) ** 2
+        
+        # Proposal Distribution
+        Q = lambda z,mu,Sig: multivariate_normal.pdf(z,mean=mu,cov=Sig) / multivariate_normal.cdf([0,0],mean=-mu,cov=Sig)
+            
+        # Target Distribution
+        logP = lambda z,x: np.sum(np.log(x**(z[0]-1) * np.exp(-z[1]*x) / (gamma(z[0]) * z[1]**(-z[0]))))
+        
+        # Step
+        step_fail = True
+        for ii in range(10):
+            a0_prop = np.random.normal(self.a0,sigma2_a)
+            b0_prop = np.random.normal(self.b0,sigma2_b)
+            if (a0_prop >= 0) & (b0_prop >= 0):
+                Y = np.array([a0_prop,b0_prop])
+                step_fail = False
+                break
+        
+        if step_fail == False:
+            Sigma = np.array([[sigma2_a,0],[0,sigma2_b]])
+            ratio = np.exp(logP(Y,self.lambdas)-logP(X,self.lambdas)) * Q(X,Y,Sigma) / Q(Y,X,Sigma)
+            A = min(1,ratio)
+            if np.random.uniform() <= A:
+                self.a0 = a0_prop
+                self.b0 = b0_prop
+    
+    #-------------------------------------------------------------------------
     # __kalman_filter
     #-------------------------------------------------------------------------
     def __kalman_filter(self):
-        
-        Q = 0.00001
+
         R = 1/self.lambdas[self.x.astype('int')]
         V = np.zeros(np.size(R))
         P = np.zeros(np.size(R))
         mu = np.zeros(np.size(R))
         
         # Initial Value
-        V0 = 1/np.sqrt(self.lambdas[0])
+        V0 = 1/(10*self.lambdas[0])
         K = V0 / (V0 + R[0])
-        mu[0] = 0.0 + K * (self.data[0] - 0.0)
+        mu[0] = 0.0 
         V[0] = (1-K) * V0
-        P[0] = V[0] + Q
+        P[0] = V[0] + self.Q
         
         # Forward Recursion
         for ii in range(1,self.nsamp):
             K = P[ii-1] / (P[ii-1] + R[ii])
             mu[ii] = mu[ii-1] + K * (self.data[ii] - mu[ii-1])
             V[ii] = (1-K) * P[ii-1]
-            P[ii] = V[ii] + Q
+            P[ii] = V[ii] + self.Q
             
         # Backward Recursion
         self.mu[-1] = mu[-1]
@@ -268,6 +314,9 @@ class TimeSeries():
         history.mean = np.zeros((self.nsamp, N+1))
         history.alpha = np.zeros(N+1)
         history.pvalue = np.zeros(N+1)
+        history.process_noise = np.zeros(N+1)
+        history.hyperparameter_a0 = np.zeros(N+1)
+        history.hyperparameter_b0 = np.zeros(N+1)
         
         self.__update_history(history, 0)
 
@@ -283,6 +332,9 @@ class TimeSeries():
         history.boundaries[:,idx] = np.append(0,np.diff(self.x))
         history.mean[:,idx] = self.mu
         history.alpha[idx] = self.alpha
+        history.process_noise [idx] = self.Q
+        history.hyperparameter_a0[idx] = self.a0
+        history.hyperparameter_b0[idx] = self.b0
         
         # Goodness of fit
         h,p = normaltest((self.data - self.mu)*np.sqrt(self.lambdas[self.x.astype('int')]))
@@ -294,7 +346,7 @@ class TimeSeries():
     def __log_likelihood(self):
         
         lambdas = self.lambdas[self.x.astype('int')]
-        L = np.sum(np.log(Gaussian(self.data, 0, lambdas)))
+        L = np.sum(np.log(Gaussian(self.data-self.mu, 0, lambdas)))
         
         n = self.__get_partitions_counts()
         L += np.sum(np.log(self.alpha * beta(n, self.alpha+1)))
