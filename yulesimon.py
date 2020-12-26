@@ -30,9 +30,9 @@ def GetYahooFeed(symbol,n_years):
     return closing_prices, log_returns, dates
      
 #-----------------------------------------------------------------------------
-# Simulate
+# GaussianNoiseProcess
 #-----------------------------------------------------------------------------
-def Simulate(N=500, alpha=1.0, seed=13, a=1.0, b=1.0):
+def GaussianNoiseProcess(N=500, alpha=1.0, a=1.0, b=1.0, Q=1e-4, seed=13):
     
     # Setup
     x = np.zeros(N)
@@ -54,12 +54,18 @@ def Simulate(N=500, alpha=1.0, seed=13, a=1.0, b=1.0):
     # Sample Precisions
     lambdas = np.random.gamma(a, 1/b, int(x[idx]+1)) 
     
+    # Sample Means
+    mu = np.zeros(N)
+    for idx in range(1,N):
+        mu[idx] = np.random.normal(mu[idx-1],Q)
+        
     # Sample Observations
     for state in range(len(lambdas)):
         mask = x==state
         y[mask] = np.random.normal(0.0, 1/np.sqrt(lambdas[state]), sum(mask))
+    y += mu
       
-    return x, y, lambdas
+    return y, x, lambdas, mu
 
 #-----------------------------------------------------------------------------
 # Gaussian
