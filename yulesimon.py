@@ -89,6 +89,16 @@ def ExpectedValue(data,burnin,downsample,mask=[]):
     return np.mean(tmp,axis=1), shape[1]
 
 #-----------------------------------------------------------------------------
+# MixtureModel
+#-----------------------------------------------------------------------------
+def MixtureModel(z,mu_t,sigma_t):
+    PDF = z*0
+    N = len(mu_t)
+    for ii in range(N):
+        PDF = PDF + Gaussian(z, mu_t[ii], 1 / (sigma_t[ii]**2))
+    return PDF/N
+
+#-----------------------------------------------------------------------------
 # TimeSeries
 #-----------------------------------------------------------------------------
 class TimeSeries():
@@ -301,7 +311,7 @@ class TimeSeries():
         for ii in range(self.nsamp-2,-1,-1):
             J = V[ii]/P[ii]
             self.mu[ii] = mu[ii] + J * (self.mu[ii+1]-mu[ii])
-            
+
     #-------------------------------------------------------------------------
     # __sample_alpha
     #-------------------------------------------------------------------------  
