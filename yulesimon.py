@@ -649,10 +649,15 @@ class TimeSeries():
         cdf = np.append(0,np.cumsum(w))
         u = np.random.uniform()
         
+        idx = -1
+        
         for kk in range(1,len(cdf)):
             if (u>=cdf[kk-1]) & (u<=cdf[kk]):
                 idx = kk-1
                 break
+            
+        if idx==-1:
+            print("WARNING: Discrete Sampler Failure -- check for NaNs in the input data")
             
         return idx
         
