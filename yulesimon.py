@@ -86,9 +86,9 @@ def Student(data,mu,precision,dof):
 # ExpectedValue
 #-----------------------------------------------------------------------------
 def ExpectedValue(data,burnin,downsample,mask=[]): 
-    tmp = data[:,int(burnin):int(downsample):-1]
+    tmp = data[:,int(burnin)::int(downsample)]
     if len(mask)>0:
-        mask = mask[int(burnin):int(downsample):-1]
+        mask = mask[int(burnin)::int(downsample)]
         tmp = tmp[:,mask]   
     shape = tmp.shape
 
@@ -112,8 +112,8 @@ class TimeSeries():
     #-------------------------------------------------------------------------
     # __init__
     #-------------------------------------------------------------------------
-    def __init__(self, data, alpha=5.0, a0=5.0, b0=5.0, Q = 1e-9, init='uniform', init_segments=50):
-        self.data = data * 100
+    def __init__(self, data, alpha=5.0, a0=5.0, b0=5.0, Q = 1e-9, init='uniform', init_segments=50, mean_removal=False):
+        self.data = data
         self.nsamp = np.size(self.data)
         self.alpha = alpha
         self.a0 = a0
@@ -122,6 +122,7 @@ class TimeSeries():
         self.x = np.zeros(data.shape)
         self.mu = np.zeros(data.shape)
         self.Q = Q
+        self.mean_removal = mean_removal
 
         if (init=='uniform'):
             self.__init_partitions_uniform(init_segments)
@@ -129,8 +130,9 @@ class TimeSeries():
             self.__init_partitions()
         else:
             raise ValueError('Unknown Initialization Type: ' + init)
-            
-        self.__kalman_filter()
+         
+        if self.mean_removal==True:
+            self.__kalman_filter()
         
     #-------------------------------------------------------------------------
     # __init_partitions_uniform
@@ -237,8 +239,9 @@ class TimeSeries():
             self.__sample_lambdas()
             self.__sample_alpha()
             self.__sample_gamma_hyperparameters()
-            self.__kalman_filter() 
-            self.__sample_process_noise()
+            if self.mean_removal==True:
+                self.__kalman_filter() 
+                self.__sample_process_noise()
             self.__update_history(history, step+1)
             
             if (step % round(N/100)) == 0:
