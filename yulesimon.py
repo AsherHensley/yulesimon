@@ -10,16 +10,12 @@ import datetime
 #-----------------------------------------------------------------------------
 # GetYahooFeed
 #-----------------------------------------------------------------------------
-def GetYahooFeed(symbol,n_years):
-    
-    # Setup Historical Window
-    end = datetime.datetime.today()
-    start = datetime.date(end.year-n_years, end.month, end.day)
+def GetYahooFeed(symbol,start_date,end_date):
     
     # Attempt to Fetch Price Data
     log_returns = []
     try:
-        df = web.DataReader(symbol, 'yahoo', start, end)
+        df = web.DataReader(symbol, 'yahoo', start_date, end_date)
         closing_prices = df.Close.to_numpy()
         log_returns = np.diff(np.log(closing_prices))
         dates = df.index.copy()
