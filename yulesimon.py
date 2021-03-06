@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+#
+# RELEASE 7.01
 
 import numpy as np
 from scipy.special import gamma, beta
