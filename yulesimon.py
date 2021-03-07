@@ -443,7 +443,7 @@ class TimeSeries():
         n = self.__get_partitions_counts()
         yt = self.data[idx] - self.mu[idx]
         xt = int(self.x[idx])
-        wnew = self.alpha / (1+self.alpha) * Student(yt,0,self.a0/self.b0,2*self.b0) 
+        wnew = self.alpha / (1+self.alpha) * Student(yt,0,self.a0/self.b0,2*self.a0) 
         
         if boundary=="FirstOpen":
             w0 = (n[0]-1) / (n[0]+self.alpha) * Gaussian(yt,0,self.lambdas[0])
