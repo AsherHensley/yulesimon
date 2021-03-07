@@ -108,12 +108,18 @@ class TimeSeries():
     #-------------------------------------------------------------------------
     # __init__
     #-------------------------------------------------------------------------
-    def __init__(self, data, alpha=5.0, a0=5.0, b0=5.0, Q = 1e-9, init='uniform', init_segments=50, mean_removal=False):
+    def __init__(self, data, alpha=5.0, a0=1.0, b0=1.0, Q = 1e-9,init='uniform',
+                 init_segments=50, mean_removal=False, sample_ab=False):
         self.data = data
         self.nsamp = np.size(self.data)
         self.alpha = alpha
+        
         self.a0 = a0
         self.b0 = b0 
+        self.sample_ab = sample_ab
+        if self.sample_ab==False:
+            self.b0 = np.var(self.data)
+        
         self.lambdas = np.array(self.__gamma_posterior(data[0]))
         self.x = np.zeros(data.shape)
         self.mu = np.zeros(data.shape)
@@ -231,13 +237,18 @@ class TimeSeries():
         history = self.__init_history(N)
 
         for step in range(N):
+            
             self.__sample_partitions()
             self.__sample_lambdas()
             self.__sample_alpha()
-            self.__sample_gamma_hyperparameters()
+            
+            if self.sample_ab==True:
+                self.__sample_gamma_hyperparameters()
+                
             if self.mean_removal==True:
                 self.__kalman_filter() 
                 self.__sample_process_noise()
+                
             self.__update_history(history, step+1)
             
             if (step % round(N/100)) == 0:
