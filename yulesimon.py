@@ -108,18 +108,15 @@ class TimeSeries():
     #-------------------------------------------------------------------------
     # __init__
     #-------------------------------------------------------------------------
-    def __init__(self, data, alpha=5.0, a0=1.0, b0=1.0, Q = 1e-9,init='uniform',
-                 init_segments=50, mean_removal=False, sample_ab=False):
+    def __init__(self, data, alpha=5.0, a0=1.0, b0=1.0, Q = 1e-9, init='uniform',
+                 init_segments=50, mean_removal=False, sample_ab=False, prop_scale=3):
         self.data = data
         self.nsamp = np.size(self.data)
         self.alpha = alpha
-        
+        self.prop_scale = prop_scale
         self.a0 = a0
         self.b0 = b0 
         self.sample_ab = sample_ab
-        if self.sample_ab==False:
-            self.b0 = np.var(self.data)
-        
         self.lambdas = np.array(self.__gamma_posterior(data[0]))
         self.x = np.zeros(data.shape)
         self.mu = np.zeros(data.shape)
@@ -271,8 +268,8 @@ class TimeSeries():
         X = np.array([self.a0,self.b0])
         
         # Proposal Distribution Sigma
-        sigma2_a = (3*0.50) ** 2
-        sigma2_b = (3*0.25) ** 2
+        sigma2_a = (self.prop_scale * 0.50) ** 2
+        sigma2_b = (self.prop_scale * 0.25) ** 2
         
         # Proposal Distribution
         Q = lambda z,mu,Sig: multivariate_normal.pdf(z,mean=mu,cov=Sig) / multivariate_normal.cdf([0,0],mean=-mu,cov=Sig)
