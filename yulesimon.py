@@ -63,6 +63,39 @@ def GaussianNoiseProcess(N=500, alpha=1.0, a=1.0, b=1.0, Q=1e-4, seed=13):
       
     return y, x, lambdas, mu
 
+
+#-----------------------------------------------------------------------------
+# PoissonNoiseProcess
+#-----------------------------------------------------------------------------
+def PoissonNoiseProcess(N=500, alpha=1.0, a=1.0, b=1.0, seed=13):
+    
+    # Setup
+    x = np.zeros(N)
+    y = np.zeros(N)
+    counter = 1
+    np.random.seed(seed)
+    
+    # Sample Partitions
+    for idx in range(1,N):
+        
+        u = np.random.uniform()
+        if u < (counter / (counter + alpha)):
+            counter += 1
+            x[idx] = x[idx-1]
+        else:
+            counter = 1
+            x[idx] = x[idx-1]+1
+          
+    # Sample Precisions
+    lambdas = np.random.gamma(a, 1/b, int(x[idx]+1)) 
+        
+    # Sample Observations
+    for state in range(len(lambdas)):
+        mask = x==state
+        y[mask] = np.random.exponential(1.0/lambdas[state], sum(mask))
+      
+    return y, x, lambdas
+
 #-----------------------------------------------------------------------------
 # Gaussian
 #-----------------------------------------------------------------------------
@@ -79,6 +112,18 @@ def Student(data,mu,precision,dof):
     return Z * (1 + precision / dof * (data - mu)**2)**(-dof/2.0 - 0.5);
 
 #-----------------------------------------------------------------------------
+# Exponential
+#-----------------------------------------------------------------------------
+def Exponential(data,LAMBDA):        
+    return LAMBDA * np.exp(-LAMBDA * data)
+
+#-----------------------------------------------------------------------------
+# Exponential-Gamma Marginal
+#-----------------------------------------------------------------------------
+def ExpGammaMarginal(data,a,b):        
+    return a * (b ** a) / ((b + data) ** (a + 1.0))
+
+#-----------------------------------------------------------------------------
 # ExpectedValue
 #-----------------------------------------------------------------------------
 def ExpectedValue(data,burnin,downsample,mask=[]): 
@@ -93,7 +138,7 @@ def ExpectedValue(data,burnin,downsample,mask=[]):
 #-----------------------------------------------------------------------------
 # MixtureModel
 #-----------------------------------------------------------------------------
-def MixtureModel(z,mu_t,sigma_t):
+def GaussianMixtureModel(z,mu_t,sigma_t):
     PDF = z*0
     N = len(mu_t)
     for ii in range(N):
@@ -109,7 +154,8 @@ class TimeSeries():
     # __init__
     #-------------------------------------------------------------------------
     def __init__(self, data, alpha=5.0, a0=1.0, b0=1.0, Q = 1e-9, init='uniform',
-                 init_segments=50, mean_removal=False, sample_ab=False, prop_scale=3):
+                 init_segments=50, mean_removal=False, sample_ab=False, 
+                 prop_scale=3, likelihood='Gaussian'):
         self.data = data
         self.nsamp = np.size(self.data)
         self.alpha = alpha
@@ -117,6 +163,7 @@ class TimeSeries():
         self.a0 = a0
         self.b0 = b0 
         self.sample_ab = sample_ab
+        self.likelihood = likelihood
         self.lambdas = np.array(self.__gamma_posterior(data[0]))
         self.x = np.zeros(data.shape)
         self.mu = np.zeros(data.shape)
@@ -187,6 +234,20 @@ class TimeSeries():
             
             # Update Partition
             self.x[kk] = state
+                 
+    #-------------------------------------------------------------------------
+    # __measure_model
+    #-------------------------------------------------------------------------
+    def __measure_model(self,yt,parm1,parm2):
+        
+        if (self.likelihood=='Gaussian'):
+            val = Gaussian(yt,parm1,parm2)
+        elif (self.likelihood=='Exponential'):
+            val = Exponential(yt,parm2)
+        else:
+            raise ValueError('Unknown Likelihood: ' + self.likelihood)
+        
+        return val
      
     #-------------------------------------------------------------------------
     # __forward_weights
@@ -200,8 +261,13 @@ class TimeSeries():
         
         # Likelihoods
         L = np.zeros(2)
-        L[0] = Gaussian(yt,0,self.lambdas[-1])
-        L[1] = Student(yt,0,self.a0 / self.b0,2 * self.a0)
+        L[0] = self.__measure_model(yt, 0.0, self.lambdas[-1])
+        if (self.likelihood=='Gaussian'):
+            L[1] = Student(yt, 0.0, self.a0 / self.b0, 2 * self.a0)
+        elif (self.likelihood=='Exponential'):
+            L[1] = ExpGammaMarginal(yt, self.a0, self.b0)
+        else:
+            raise ValueError('Unknown Likelihood: ' + self.likelihood)
         
         # Compute Weights
         w = L * p
@@ -220,10 +286,16 @@ class TimeSeries():
 
         if b0==-1:
             b0 = self.b0
-        
-        aN = a0 + 0.5 * N
-        bN = b0 + 0.5 * np.sum(np.square(data - mu)) 
-        
+            
+        if (self.likelihood=='Gaussian'):
+            aN = a0 + 0.5 * N
+            bN = b0 + 0.5 * np.sum(np.square(data - mu))  
+        elif (self.likelihood=='Exponential'):
+            aN = a0 + N
+            bN = b0 + np.sum(data) 
+        else:
+            raise ValueError('Unknown Likelihood: ' + self.likelihood)
+
         return np.random.gamma(aN,1/bN,1)
     
     #-------------------------------------------------------------------------
@@ -268,8 +340,8 @@ class TimeSeries():
         X = np.array([self.a0,self.b0])
         
         # Proposal Distribution Sigma
-        sigma2_a = (self.prop_scale * 0.50) ** 2
-        sigma2_b = (self.prop_scale * 0.25) ** 2
+        sigma2_a = (self.prop_scale * 0.5) ** 2
+        sigma2_b = (self.prop_scale * 0.5) ** 2
         
         # Proposal Distribution
         Q = lambda z,mu,Sig: multivariate_normal.pdf(z,mean=mu,cov=Sig) / multivariate_normal.cdf([0,0],mean=-mu,cov=Sig)
@@ -364,7 +436,14 @@ class TimeSeries():
     def __update_history(self, history, idx):
         
         history.log_likelihood[idx] = self.__log_likelihood()
-        history.std_deviation[:,idx] = 1/np.sqrt(self.lambdas[self.x.astype('int')])
+        
+        if (self.likelihood=='Gaussian'):
+            history.std_deviation[:,idx] = 1/np.sqrt(self.lambdas[self.x.astype('int')])
+        elif (self.likelihood=='Exponential'):
+            history.std_deviation[:,idx] = 1/self.lambdas[self.x.astype('int')]
+        else:
+            raise ValueError('Unknown Likelihood: ' + self.likelihood)
+        
         history.boundaries[:,idx] = np.append(0,np.diff(self.x))
         history.mean[:,idx] = self.mu
         history.alpha[idx] = self.alpha
@@ -373,7 +452,10 @@ class TimeSeries():
         history.hyperparameter_b0[idx] = self.b0
         
         # Goodness of fit
-        h,p = normaltest((self.data - self.mu)*np.sqrt(self.lambdas[self.x.astype('int')]))
+        if (self.likelihood=='Gaussian'):
+            h,p = normaltest((self.data - self.mu)*np.sqrt(self.lambdas[self.x.astype('int')]))
+        else:
+            p = -1.0
         history.pvalue[idx] = p  
             
     #-------------------------------------------------------------------------
@@ -382,7 +464,12 @@ class TimeSeries():
     def __log_likelihood(self):
         
         lambdas = self.lambdas[self.x.astype('int')]
-        L = np.sum(np.log(Gaussian(self.data-self.mu, 0, lambdas)))
+        if (self.likelihood=='Gaussian'):
+            L = np.sum(np.log(Gaussian(self.data-self.mu, 0, lambdas)))
+        elif (self.likelihood=='Exponential'):
+            L = np.sum(np.log(Exponential(self.data, lambdas)))
+        else:
+            raise ValueError('Unknown Likelihood: ' + self.likelihood)
         
         n = self.__get_partitions_counts()
         L += np.sum(np.log(self.alpha * beta(n, self.alpha+1)))
@@ -407,7 +494,13 @@ class TimeSeries():
         
         N = int(max(self.x)+1)
         for ii in range(N):
-            yt = self.data[self.x==ii] - self.mu[self.x==ii]
+            if (self.likelihood=='Gaussian'):
+                yt = self.data[self.x==ii] - self.mu[self.x==ii]
+            elif (self.likelihood=='Exponential'):
+                yt = self.data[self.x==ii]
+            else:
+                raise ValueError('Unknown Likelihood: ' + self.likelihood)
+                
             self.lambdas[ii] = self.__gamma_posterior(yt)
                  
     #-------------------------------------------------------------------------
@@ -451,43 +544,50 @@ class TimeSeries():
         n = self.__get_partitions_counts()
         yt = self.data[idx] - self.mu[idx]
         xt = int(self.x[idx])
-        wnew = self.alpha / (1+self.alpha) * Student(yt,0,self.a0/self.b0,2*self.a0) 
+        wnew = self.alpha / (1+self.alpha) 
+        
+        if (self.likelihood=='Gaussian'):
+            wnew *= Student(yt, 0.0, self.a0 / self.b0, 2 * self.a0)
+        elif (self.likelihood=='Exponential'):
+            wnew *= ExpGammaMarginal(yt, self.a0, self.b0)
+        else:
+            raise ValueError('Unknown Likelihood: ' + self.likelihood)
         
         if boundary=="FirstOpen":
-            w0 = (n[0]-1) / (n[0]+self.alpha) * Gaussian(yt,0,self.lambdas[0])
+            w0 = (n[0]-1) / (n[0]+self.alpha) * self.__measure_model(yt,0,self.lambdas[0])
             w = np.array([w0,wnew])
             self.__sample_first_open(w, yt)
             
         elif boundary=="FirstClosed":  
-            w0 = n[1] / (n[1]+self.alpha+1) * Gaussian(yt,0,self.lambdas[1])
+            w0 = n[1] / (n[1]+self.alpha+1) * self.__measure_model(yt,0,self.lambdas[1])
             w = np.array([w0,wnew])
             self.__sample_first_closed(w, yt)
               
         elif boundary=="LastOpen":
-            w0 = (n[-1]-1) / (n[-1]+self.alpha) * Gaussian(yt,0,self.lambdas[-1])
+            w0 = (n[-1]-1) / (n[-1]+self.alpha) * self.__measure_model(yt,0,self.lambdas[-1])
             w = np.array([w0,wnew])
             self.__sample_last_open(w, yt)
             
         elif boundary=="LastClosed":  
-            w0 = n[xt-1] / (n[xt-1]+self.alpha+1) * Gaussian(yt,0,self.lambdas[-2])
+            w0 = n[xt-1] / (n[xt-1]+self.alpha+1) * self.__measure_model(yt,0,self.lambdas[-2])
             w = np.array([w0,wnew])
             self.__sample_last_closed(w, yt)
         
         elif boundary=="Left":
-            w0 = (n[xt]-1) / (n[xt]+self.alpha) * Gaussian(yt,0,self.lambdas[xt])
-            w1 = n[xt-1] / (n[xt-1]+self.alpha+1) * Gaussian(yt,0,self.lambdas[xt-1])
+            w0 = (n[xt]-1) / (n[xt]+self.alpha) * self.__measure_model(yt,0,self.lambdas[xt])
+            w1 = n[xt-1] / (n[xt-1]+self.alpha+1) * self.__measure_model(yt,0,self.lambdas[xt-1])
             w = np.array([w0,w1,wnew])
             self.__sample_left_boundary(w, idx)
   
         elif boundary=="Right":
-            w0 = (n[xt]-1) / (n[xt]+self.alpha) * Gaussian(yt,0,self.lambdas[xt])
-            w1 = n[xt+1] / (n[xt+1]+self.alpha+1) * Gaussian(yt,0,self.lambdas[xt+1])
+            w0 = (n[xt]-1) / (n[xt]+self.alpha) * self.__measure_model(yt,0,self.lambdas[xt])
+            w1 = n[xt+1] / (n[xt+1]+self.alpha+1) * self.__measure_model(yt,0,self.lambdas[xt+1])
             w = np.array([w0,w1,wnew])
             self.__sample_right_boundary(w, idx)
 
         elif boundary=="Double":
-            w0 = n[xt-1] / (n[xt-1]+self.alpha+1) * Gaussian(yt,0,self.lambdas[xt-1])
-            w1 = n[xt+1] / (n[xt+1]+self.alpha+1) * Gaussian(yt,0,self.lambdas[xt+1])
+            w0 = n[xt-1] / (n[xt-1]+self.alpha+1) * self.__measure_model(yt,0,self.lambdas[xt-1])
+            w1 = n[xt+1] / (n[xt+1]+self.alpha+1) * self.__measure_model(yt,0,self.lambdas[xt+1])
             w = np.array([w0,w1,wnew])
             self.__sample_double_boundary(w, idx)
 
@@ -569,7 +669,14 @@ class TimeSeries():
     def __sample_left_boundary(self, w, idx):
     
         u = self.__sample_discrete(w)
-        yt = self.data[idx] - self.mu[idx]
+            
+        if (self.likelihood=='Gaussian'):
+            yt = self.data[idx] - self.mu[idx]
+        elif (self.likelihood=='Exponential'):
+            yt = self.data[idx]
+        else:
+            raise ValueError('Unknown Likelihood: ' + self.likelihood)           
+            
         xt = int(self.x[idx])
         
         if u==0:
@@ -593,7 +700,14 @@ class TimeSeries():
     def __sample_right_boundary(self, w, idx):
         
         u = self.__sample_discrete(w)
-        yt = self.data[idx] - self.mu[idx]
+        
+        if (self.likelihood=='Gaussian'):
+            yt = self.data[idx] - self.mu[idx]
+        elif (self.likelihood=='Exponential'):
+            yt = self.data[idx]
+        else:
+            raise ValueError('Unknown Likelihood: ' + self.likelihood)  
+            
         xt = int(self.x[idx])
         
         if u==0:
@@ -618,7 +732,14 @@ class TimeSeries():
     def __sample_double_boundary(self, w, idx):
         
         u = self.__sample_discrete(w)
-        yt = self.data[idx] - self.mu[idx]
+        
+        if (self.likelihood=='Gaussian'):
+            yt = self.data[idx] - self.mu[idx]
+        elif (self.likelihood=='Exponential'):
+            yt = self.data[idx]
+        else:
+            raise ValueError('Unknown Likelihood: ' + self.likelihood)  
+            
         xt = int(self.x[idx])
         
         if u==0:
