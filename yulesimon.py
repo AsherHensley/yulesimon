@@ -155,7 +155,7 @@ class TimeSeries():
     #-------------------------------------------------------------------------
     def __init__(self, data, alpha=5.0, a0=1.0, b0=1.0, Q = 1e-9, init='uniform',
                  init_segments=50, mean_removal=False, sample_ab=False, 
-                 prop_scale=3, likelihood='Gaussian'):
+                 prop_scale=3, likelihood='Gaussian',use_memory=False,rho=1.0):
         self.data = data
         self.nsamp = np.size(self.data)
         self.alpha = alpha
@@ -169,10 +169,15 @@ class TimeSeries():
         self.mu = np.zeros(data.shape)
         self.Q = Q
         self.mean_removal = mean_removal
-
-        if (init=='uniform'):
+        
+        self.use_memory = use_memory
+        self.rho = rho
+        self.z = np.array([0])
+        self.ulambdas = self.lambdas.copy()
+        
+        if ((init=='uniform') & (use_memory==False)):
             self.__init_partitions_uniform(init_segments)
-        elif (init=='prior'):
+        elif ((init=='prior') | (use_memory==True)):
             self.__init_partitions()
         else:
             raise ValueError('Unknown Initialization Type: ' + init)
@@ -226,7 +231,11 @@ class TimeSeries():
             # Update State
             if regime_change==True:
                 state = state + 1
-                new_lambda = self.__gamma_posterior(self.data[kk])
+                if self.use_memory==True:
+                    new_lambda,zk = self.__init_memory(self.data[kk]) 
+                    self.z = np.append(self.z, zk)
+                else:
+                    new_lambda = self.__gamma_posterior(self.data[kk])
                 self.lambdas = np.append(self.lambdas, new_lambda)
                 counter = 1.0
             else:
@@ -234,7 +243,41 @@ class TimeSeries():
             
             # Update Partition
             self.x[kk] = state
-                 
+            
+    #-------------------------------------------------------------------------
+    # __init_memory
+    #-------------------------------------------------------------------------
+    def __init_memory(self,yt): 
+        
+        # Setup
+        tables,counts = np.unique(self.z,return_counts=True)
+        num_tables = counts.size
+        p = np.zeros(num_tables+1)
+        
+        # Existing Table Probabilities
+        for kk in range(num_tables):
+            p[kk] = counts[kk] * self.__measure_model(yt, 0.0, self.ulambdas[kk])
+        
+        # New Table Probability
+        if (self.likelihood=='Gaussian'):
+            L = Student(yt, 0.0, self.a0 / self.b0, 2 * self.a0)
+        elif (self.likelihood=='Exponential'):
+            L = ExpGammaMarginal(yt, self.a0, self.b0)
+        else:
+            raise ValueError('Unknown Likelihood: ' + self.likelihood)
+        p[num_tables] = self.rho * L
+        
+        # Select Table
+        zk = self.__sample_discrete(p)
+        
+        if (zk==num_tables):
+            new_lambda = self.__gamma_posterior(yt)
+            self.ulambdas = np.append(self.ulambdas, new_lambda)
+        else:
+            new_lambda = self.ulambdas[zk]
+        
+        return new_lambda, zk        
+        
     #-------------------------------------------------------------------------
     # __measure_model
     #-------------------------------------------------------------------------
@@ -308,7 +351,12 @@ class TimeSeries():
         for step in range(N):
             
             self.__sample_partitions()
-            self.__sample_lambdas()
+            
+            if self.use_memory==True:
+                self.__sample_lambdas_from_memory()
+            else:
+                self.__sample_lambdas()
+                    
             self.__sample_alpha()
             
             if self.sample_ab==True:
@@ -426,6 +474,9 @@ class TimeSeries():
         history.hyperparameter_a0 = np.zeros(N+1)
         history.hyperparameter_b0 = np.zeros(N+1)
         
+        if self.use_memory==True:
+            history.state = np.zeros((self.nsamp, N+1))
+        
         self.__update_history(history, 0)
 
         return history
@@ -450,6 +501,9 @@ class TimeSeries():
         history.process_noise [idx] = self.Q
         history.hyperparameter_a0[idx] = self.a0
         history.hyperparameter_b0[idx] = self.b0
+        
+        if self.use_memory==True:
+            history.state[:,idx] = self.z[self.x.astype('int')]
         
         # Goodness of fit
         if (self.likelihood=='Gaussian'):
@@ -486,6 +540,93 @@ class TimeSeries():
             
             if boundary != "None":
                 self.__update_markov_chain(kk, boundary)
+                
+    #-------------------------------------------------------------------------
+    # __sample_new_state
+    #-------------------------------------------------------------------------  
+    def __sample_new_state(self,yt,zk_init):
+        
+        # Get Current Customer Arrangement
+        tables,counts = np.unique(self.z,return_counts=True)
+        num_tables = self.ulambdas.size
+        p = np.zeros(num_tables+1)
+        
+        for kk in range(len(tables)):
+            
+            # Get Customer Count for Table kk
+            num_customers = counts[kk]
+            idx = tables[kk]
+            if num_customers==0:
+                continue
+            
+            # Remove Current Customer
+            if zk_init==idx:
+                num_customers -= 1
+                
+            # Get Likelihoods
+            L = self.__measure_model(yt, 0.0, self.ulambdas[idx])
+            p[idx] = num_customers * np.prod(L)
+            
+        # New Table Probability
+        #if zk_init>=0:
+        if (self.likelihood=='Gaussian'):
+            L = Student(yt, 0.0, self.a0 / self.b0, 2 * self.a0)
+        elif (self.likelihood=='Exponential'):
+            L = ExpGammaMarginal(yt, self.a0, self.b0)
+        else:
+            raise ValueError('Unknown Likelihood: ' + self.likelihood)
+        p[num_tables] = self.rho * np.prod(L)
+        
+        # Assign New Table
+        zk = self.__sample_discrete(p)
+        
+        # Assign New Lambda
+        if (zk==num_tables):
+            new_lambda = self.__gamma_posterior(yt)
+            self.ulambdas = np.append(self.ulambdas, new_lambda)
+        else:
+            new_lambda = self.ulambdas[zk]
+            
+        return new_lambda, zk
+            
+    #-------------------------------------------------------------------------
+    # __sample_lambdas_from_memory
+    #-------------------------------------------------------------------------      
+    def __sample_lambdas_from_memory(self):
+        
+        # Update Customer Assignments
+        N = int(max(self.x)+1)
+        for ii in range(N):
+            
+            # Get Measurements
+            if (self.likelihood=='Gaussian'):
+                yt = self.data[self.x==ii] - self.mu[self.x==ii]
+            elif (self.likelihood=='Exponential'):
+                yt = self.data[self.x==ii]
+            else:
+                raise ValueError('Unknown Likelihood: ' + self.likelihood)
+                
+            # Sample New State
+            new_lambda, zk = self.__sample_new_state(yt,self.z[ii])
+            self.lambdas[ii] = new_lambda
+            self.z[ii] = zk
+              
+        # Update Table Dishes
+        M = np.max(self.z)
+        for kk in range(M):
+            
+            # Get Measurements
+            mask = self.z[self.x.astype('int')]==kk
+            
+            if (self.likelihood=='Gaussian'):
+                yt = self.data[mask] - self.mu[mask]
+            elif (self.likelihood=='Exponential'):
+                yt = self.data[mask]
+            else:
+                raise ValueError('Unknown Likelihood: ' + self.likelihood)
+                
+            self.ulambdas[kk] = self.__gamma_posterior(yt)
+            self.lambdas[self.z==kk] = self.ulambdas[kk]
                 
     #-------------------------------------------------------------------------
     # __sample_lambdas
@@ -610,7 +751,11 @@ class TimeSeries():
             # Add New Partition
             self.x = self.x + 1
             self.x[0] = 0
-            new_lambda = self.__gamma_posterior(yt)
+            if self.use_memory==True:
+                new_lambda, zk = self.__sample_new_state(yt,-1)
+                self.z = np.append(zk, self.z)
+            else:
+                new_lambda = self.__gamma_posterior(yt)
             self.lambdas = np.append(new_lambda, self.lambdas)
      
     #-------------------------------------------------------------------------
@@ -624,11 +769,17 @@ class TimeSeries():
             self.x[0] = 1
             self.x = self.x - 1
             self.lambdas = self.lambdas[1:]
+            if self.use_memory==True:
+                self.z = self.z[1:]
             
         else:
             # Add New Partition
             self.x[0] = 0
-            new_lambda = self.__gamma_posterior(yt)
+            if self.use_memory==True:
+                new_lambda, zk = self.__sample_new_state(yt,-1)
+                self.z[0] = zk
+            else:
+                new_lambda = self.__gamma_posterior(yt)
             self.lambdas[0] = new_lambda
             
     #-------------------------------------------------------------------------
@@ -644,7 +795,11 @@ class TimeSeries():
         else:
             # Add New Partition
             self.x[-1] = self.x[-1]+1
-            new_lambda = self.__gamma_posterior(yt)
+            if self.use_memory==True:
+                new_lambda, zk = self.__sample_new_state(yt,-1)
+                self.z = np.append(self.z, zk)
+            else:
+                new_lambda = self.__gamma_posterior(yt)
             self.lambdas = np.append(self.lambdas, new_lambda)
         
     #-------------------------------------------------------------------------
@@ -657,11 +812,18 @@ class TimeSeries():
             # Merge to Left Partition
             self.x[-1] = self.x[-1] - 1
             self.lambdas = self.lambdas[:-1]
+            if self.use_memory==True:
+                self.z = self.z[:-1]
             
         else:
-            # Add New Partition 
+            # Replace Partition 
             self.x[-1] = self.x[-1]
-            self.lambdas[-1] = self.__gamma_posterior(yt)
+            if self.use_memory==True:
+                new_lambda, zk = self.__sample_new_state(yt,-1)
+                self.z[-1] = zk
+            else:
+                new_lambda = self.__gamma_posterior(yt)
+            self.lambdas[-1] = new_lambda
         
     #-------------------------------------------------------------------------
     # __sample_left_boundary
@@ -690,7 +852,12 @@ class TimeSeries():
         else:
             # Add New Partition
             self.x[(idx+1):] = self.x[(idx+1):] + 1
-            new_lambda = self.__gamma_posterior(yt)
+            if self.use_memory==True:
+                new_lambda, zk = self.__sample_new_state(yt,-1)
+                tmp = np.append(self.z[:xt], zk)
+                self.z = np.append(tmp, self.z[xt:])
+            else:
+                new_lambda = self.__gamma_posterior(yt)
             tmp = np.append(self.lambdas[:xt], new_lambda)
             self.lambdas = np.append(tmp, self.lambdas[xt:])
             
@@ -722,7 +889,12 @@ class TimeSeries():
             # Add New Partition
             self.x[idx] = self.x[idx] + 1
             self.x[(idx+1):] = self.x[(idx+1):] + 1
-            new_lambda = self.__gamma_posterior(yt)
+            if self.use_memory==True:
+                new_lambda, zk = self.__sample_new_state(yt,-1)
+                tmp = np.append(self.z[:(xt+1)], zk)
+                self.z = np.append(tmp, self.z[(xt+1):])
+            else:
+                new_lambda = self.__gamma_posterior(yt)
             tmp = np.append(self.lambdas[:(xt+1)], new_lambda)
             self.lambdas = np.append(tmp, self.lambdas[(xt+1):])
             
@@ -746,15 +918,24 @@ class TimeSeries():
             # Merge to Left Partition
             self.x[idx:] = self.x[idx:] - 1
             self.lambdas = np.delete(self.lambdas,xt)
+            if self.use_memory==True:
+                self.z = np.delete(self.z,xt)
             
         elif u==1:
             # Merge to Right Partition
             self.x[(idx+1):] = self.x[(idx+1):] - 1
             self.lambdas = np.delete(self.lambdas,xt)
+            if self.use_memory==True:
+                self.z = np.delete(self.z,xt)
             
         else:
-            # Add New Partition 
-            self.lambdas[xt] = self.__gamma_posterior(yt)
+            # Replace Current State
+            if self.use_memory==True:
+                new_lambda, zk = self.__sample_new_state(yt,-1)
+                self.z[xt] = zk
+            else:
+                new_lambda = self.__gamma_posterior(yt)
+            self.lambdas[xt] = new_lambda
     
     #-------------------------------------------------------------------------
     # __get_partitions_counts
