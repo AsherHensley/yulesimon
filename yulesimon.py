@@ -347,6 +347,8 @@ class TimeSeries():
     def step(self, N=100):
         
         history = self.__init_history(N)
+        reject = np.zeros(N)
+        ratio = np.zeros(N)
 
         for step in range(N):
             
@@ -359,8 +361,9 @@ class TimeSeries():
                     
             self.__sample_alpha()
             
+            # Sample Gamma Hyperparameters
             if self.sample_ab==True:
-                self.__sample_gamma_hyperparameters()
+                reject[step],ratio[step] = self.__sample_gamma_hyperparameters()
                 
             if self.mean_removal==True:
                 self.__kalman_filter() 
@@ -370,6 +373,13 @@ class TimeSeries():
             
             if (step % round(N/100)) == 0:
                 print(".",end='')
+          
+        print("\n")
+        print("Done.\n")
+        
+        # Print Reject Rate        
+        if self.sample_ab==True:
+            print("Metropolis-Hastings Rejection Rate: " + str(100*np.mean(reject)) + "%")
                 
         return history
     
@@ -388,17 +398,18 @@ class TimeSeries():
         X = np.array([self.a0,self.b0])
         
         # Proposal Distribution Sigma
-        sigma2_a = (self.prop_scale * 0.5) ** 2
-        sigma2_b = (self.prop_scale * 0.5) ** 2
+        sigma2_a = (self.prop_scale) ** 2
+        sigma2_b = (self.prop_scale) ** 2
         
         # Proposal Distribution
-        Q = lambda z,mu,Sig: multivariate_normal.pdf(z,mean=mu,cov=Sig) / multivariate_normal.cdf([0,0],mean=-mu,cov=Sig)
+        logQ = lambda z,mu,Sig: np.log(multivariate_normal.pdf(z,mean=mu,cov=Sig)) - np.log(multivariate_normal.cdf([0,0],mean=-mu,cov=Sig))
             
         # Target Distribution
-        logP = lambda z,x: np.sum(np.log(x**(z[0]-1) * np.exp(-z[1]*x) / (gamma(z[0]) * z[1]**(-z[0]))))
+        logP = lambda z,x: (z[0]-1)*np.sum(np.log(x)) - z[1]*np.sum(x) - x.size * (np.log(gamma(z[0])) - z[0]*np.log(z[1]))
         
         # Step
         step_fail = True
+        reject = True
         for ii in range(10):
             a0_prop = np.random.normal(self.a0,sigma2_a)
             b0_prop = np.random.normal(self.b0,sigma2_b)
@@ -409,11 +420,14 @@ class TimeSeries():
         
         if step_fail == False:
             Sigma = np.array([[sigma2_a,0],[0,sigma2_b]])
-            ratio = np.exp(logP(Y,self.lambdas)-logP(X,self.lambdas)) * Q(X,Y,Sigma) / Q(Y,X,Sigma)
+            ratio = np.exp(logP(Y,self.lambdas) - logP(X,self.lambdas) + logQ(X,Y,Sigma) - logQ(Y,X,Sigma))
             A = min(1,ratio)
             if np.random.uniform() <= A:
                 self.a0 = a0_prop
                 self.b0 = b0_prop
+                reject = False
+                
+        return reject,ratio
     
     #-------------------------------------------------------------------------
     # __kalman_filter
@@ -966,7 +980,7 @@ class TimeSeries():
                 break
             
         if idx==-1:
-            print("WARNING: Discrete Sampler Failure -- check for NaNs in the input data")
+            print("WARNING: Discrete Sampler Failure -- check for NaNs in the input data")     
             
         return idx
         
